@@ -1,6 +1,6 @@
 # rdflib.js Makefile
 
-R=util.js uri.js term.js rdfparser.js n3parser.js identity.js parseRDFa.js  \
+R=util.js uri.js term.js rdfparser.js n3parser.js identity.js rdfaparser.js  \
 	patchParser.js query.js sparql.js update.js jsonparser.js serialize.js \
 	updatesVia.js web.js
 
@@ -9,7 +9,7 @@ targets=$(addprefix dist/, rdflib-node.js)
 
 PATH:=./node_modules/.bin:${PATH}
 
-all: dist $(targets) dist/rdflib.js
+all: dist $(targets) dist/rdflib.js dist/rdflib.min.js
 
 size:
 	wc $R
@@ -49,12 +49,15 @@ gh-pages: detach
 
 clean:
 	rm -f $(targets)
-	rm -f dist/rdflib.js
+	rm -f dist/*
+
 
 status:
 	@pwd
 	@git branch -v
 	@git status -s
+
+minify: dist/rdflib.min.js
 
 writable:
 	@sed -i -re 's/git:\/\/github.com\//git@github.com:/' .git/config

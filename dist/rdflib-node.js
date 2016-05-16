@@ -3,18 +3,9 @@
 * Utility functions for $rdf and the $rdf object itself
  */
 
-if (typeof tabulator !== 'undefined' &&
-  typeof tabulator.isExtension === 'undefined') {
-  tabulator.isExtension = false // stand-alone library
-}
 if (typeof $rdf === 'undefined') {
   var $rdf = {}
 } else {
-  // dump("Internal error: RDF libray has already been loaded\n")
-  // dump("Internal error: $rdf type is "+typeof $rdf+"\n")
-  // dump("Internal error: $rdf.log type is "+typeof $rdf.log+"\n")
-  // dump("Internal error: $rdf.log.error type is "+typeof $rdf.log.error+"\n")
-  // return $rdf
   throw new Error('Internal error: RDF libray has already been loaded: $rdf already exists')
 }
 
@@ -379,7 +370,7 @@ $rdf.Util.parseXML = function (str, options) {
     // var dom = jsdom.jsdom(str, undefined, {} );// html, level, options
 
     var DOMParser = require('xmldom').DOMParser // 2015-08 on https://github.com/jindw/xmldom
-    var dom = new DOMParser().parseFromString(str, options.contentType || 'text/html') // text/xml
+    var dom = new DOMParser().parseFromString(str, options.contentType || 'application/xhtml+xml')
     return dom
   } else {
     if (typeof window !== 'undefined' && window.DOMParser) {
@@ -406,6 +397,88 @@ $rdf.Util.string = {
     }
     return result + baseA.slice(subs.length).join()
   }
+}
+
+//From https://github.com/linkeddata/dokieli
+$rdf.Util.domToString = function(node, options) {
+  var options = options || {}
+  var selfClosing = []
+  if ('selfClosing' in options) {
+    options.selfClosing.split(' ').forEach(function (n) {
+      selfClosing[n] = true
+    })
+  }
+  var skipAttributes = [];
+  if ('skipAttributes' in options) {
+    options.skipAttributes.split(' ').forEach(function (n) {
+      skipAttributes[n] = true
+    })
+  }
+
+  var noEsc = [false];
+
+  var dumpNode = function(node) {
+    var out = ''
+    if (typeof node.nodeType === 'undefined') return out
+    if (1 === node.nodeType) {
+      if (node.hasAttribute('class') && 'classWithChildText' in options && node.matches(options.classWithChildText.class)) {
+        out += node.querySelector(options.classWithChildText.element).textContent
+      }
+      else if (!('skipNodeWithClass' in options && node.matches('.' + options.skipNodeWithClass))) {
+        var ename = node.nodeName.toLowerCase()
+        out += "<" + ename
+
+        var attrList = []
+        for (var i = node.attributes.length - 1; i >= 0; i--) {
+          var atn = node.attributes[i]
+          if (skipAttributes.length > 0 && skipAttributes[atn.name]) continue
+          if (/^\d+$/.test(atn.name)) continue
+          if (atn.name == 'class' && 'replaceClassItemWith' in options && (atn.value.split(' ').indexOf(options.replaceClassItemWith.source) > -1)) {
+            var re = new RegExp(options.replaceClassItemWith.source, 'g')
+            atn.value = atn.value.replace(re, options.replaceClassItemWith.target).trim()
+          }
+          if (!(atn.name == 'class' && 'skipClassWithValue' in options && options.skipClassWithValue == atn.value)) {
+            attrList.push(atn.name + "=\"" + atn.value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;') + "\"")
+          }
+        }
+
+        if (attrList.length > 0) {
+          if('sortAttributes' in options && options.sortAttributes) {
+            attrList.sort(function (a, b) {
+              return a.toLowerCase().localeCompare(b.toLowerCase())
+            })
+          }
+          out += ' ' + attrList.join(' ')
+        }
+
+        if (selfClosing[ename]) { out += " />"; }
+        else {
+          out += '>';
+          out += (ename == 'html') ? "\n  " : ''
+          noEsc.push(ename === "style" || ename === "script");
+          for (var i = 0; i < node.childNodes.length; i++) out += dumpNode(node.childNodes[i])
+          noEsc.pop()
+          out += (ename == 'body') ? '</' + ename + '>' + "\n" : '</' + ename + '>'
+        }
+      }
+    }
+    else if (8 === node.nodeType) {
+      //FIXME: If comments are not tabbed in source, a new line is not prepended
+      out += "<!--" + node.nodeValue + "-->"
+    }
+    else if (3 === node.nodeType || 4 === node.nodeType) {
+      //XXX: Remove new lines which were added after DOM ready
+      var nl = node.nodeValue.replace(/\n+$/, '')
+      out += noEsc[noEsc.length - 1] ? nl : nl.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    }
+    else {
+      console.log("Warning; Cannot handle serialising nodes of type: " + node.nodeType)
+      console.log(node)
+    }
+    return out
+  };
+
+  return dumpNode(node)
 }
 
 // Reomved 2015-08-05 timbl - unused and depended on jQuery!
@@ -807,15 +880,13 @@ $rdf.NamedNode = (function (superClass) {
     }
   }
 
+  // $rdf node for the containing directory, ending in slash.
   NamedNode.prototype.dir = function () {
-    var p
-    var str
-    str = this.uri.split('#')[0]
-    p = str.lastIndexOf('/')
-    if (p < 0) {
-      throw new Error('dir: No slash in path: ' + str)
-    }
-    return new $rdf.NamedNode(str.slice(0, p))
+    var str = this.uri.split('#')[0]
+    var p = str.slice(0, -1).lastIndexOf('/')
+    var q = str.indexOf('//')
+    if ((q >= 0 && p < q + 2) || p < 0) return null
+    return new $rdf.NamedNode(str.slice(0, p + 1))
   }
 
   NamedNode.prototype.sameTerm = function (other) {
@@ -875,7 +946,7 @@ $rdf.BlankNode = (function (superClass) {
 
   function BlankNode (id) {
     this.id = $rdf.NextId++
-    this.value = id ? id : this.id.toString()
+    this.value = id || this.id.toString()
   }
 
   BlankNode.prototype.termType = 'bnode'
@@ -1170,10 +1241,6 @@ $rdf.Formula = (function (superClass) {
   Formula.prototype.sym = function (uri, name) {
     if (name) {
       throw new Error('This feature (kb.sym with 2 args) is removed. Do not assume prefix mappings.')
-      // if (!$rdf.ns[uri]) {
-      //   throw new Error('The prefix ' + uri + ' is not set in the API')
-      // }
-      // uri = $rdf.ns[uri] + name
     }
     return new $rdf.NamedNode(uri)
   }
@@ -4420,13 +4487,12 @@ $rdf.IndexedFormula = (function () {
   return $rdf.IndexedFormula
 })()
 // ends
-//  RDF/A Parser for rdflib.js
+//  RDFa Parser for rdflib.js
 
 // Originally by: Alex Milowski
+// From https://github.com/alexmilowski/green-turtle
 // Converted: timbl 2015-08-25 not yet working
-// Was taken from:  https://github.com/alexmilowski/green-turtle
-
-// See http://www.w3.org/TR/rdfa-syntax/  etc
+// Added wrapper: csarven 2016-05-09 working
 
 // $rdf.RDFaProcessor.prototype = new Object() // Was URIResolver
 
@@ -4465,11 +4531,12 @@ $rdf.RDFaProcessor = function RDFaProcessor (kb, options) {
       }
   }
 
-  console.log('base URI ' + this.options.base)
-  var mode = options.mode || 'html'
-  this.inXHTMLMode = false
-  this.inHTMLMode = false
-
+  //XXX: Added to track bnodes
+  this.blankNodes = []
+  //XXX: Added for normalisation
+  this.htmlOptions = {
+    'selfClosing': "br img input area base basefont col colgroup source wbr isindex link meta param hr"
+  }
   this.theOne = '_:' + (new Date()).getTime()
   this.language = null
   this.vocabulary = null
@@ -4735,47 +4802,62 @@ $rdf.RDFaProcessor.prototype.setXHTMLContext = function () {
   this.target.graph.terms['transformation'] = 'http://www.w3.org/1999/xhtml/vocab#transformation'
 }
 
-$rdf.RDFaProcessor.prototype.init = function () {}
+$rdf.RDFaProcessor.prototype.init = function () {
+}
 
 $rdf.RDFaProcessor.prototype.newSubjectOrigin = function (origin, subject) {
-  console.log('@@@@ newSubjectOrigin @@ what should this do? ')
 }
 
 $rdf.RDFaProcessor.prototype.addTriple = function (origin, subject, predicate, object) {
-  function convert (x) {
-    console.log('convert term ' + typeof x)
-    if (typeof x === 'string') {
-      console.log('    string is ' + x)
-      console.log('    sym is ' + $rdf.sym(x))
-      return $rdf.sym(x)
-    }
-    if (typeof x === 'undefined') return undefined
-    console.log('    type is ' + x.type)
-    switch (object.type) {
-      case $rdf.RDFaProcessor.objectURI:
-        return $rdf.sym(x.value)
-      case $rdf.RDFaProcessor.PlainLiteralURI:
-        return $rdf.term(x.value); // @@ types?
-      default:
-    }
-    throw 'internal type ' + x.type
-  }
   var su, ob, pr, or
   if (typeof subject === 'undefined') {
-    su = $rdf.sym(this.options.base); // this document is default sub???
+    su = $rdf.sym(this.options.base)
   } else {
-    su = convert(subject)
+    su = this.toRDFNodeObject(subject)
   }
-  pr = convert(predicate)
-  ob = convert(object)
-  // or = convert(origin)
+  pr = this.toRDFNodeObject(predicate)
+  ob = this.toRDFNodeObject(object)
   or = $rdf.sym(this.options.base)
-  console.log('Adding { ' + su + ' ' + pr + ' ' + ob + ' ' + or + ' }')
+  //console.log('Adding { ' + su + ' ' + pr + ' ' + ob + ' ' + or + ' }')
   this.kb.add(su, pr, ob, or)
 }
 
-$rdf.RDFaProcessor.prototype.resolveAndNormalize = function (uri, base) {
-  // console.log("Joining " + uri + " to " + uri + " making " +  $rdf.uri.join(uri, base))
+$rdf.RDFaProcessor.prototype.toRDFNodeObject = function(x) {
+  if (typeof x === 'undefined') return undefined
+  if (typeof x === 'string') {
+    if (x.substring(0,2) == "_:") {
+      if (typeof this.blankNodes[x.substring(2)] === 'undefined') {
+        this.blankNodes[x.substring(2)] = new $rdf.BlankNode(x.substring(2))
+      }
+      return this.blankNodes[x.substring(2)]
+    }
+    return $rdf.sym(x)
+  }
+  switch(x.type) {
+    case $rdf.RDFaProcessor.objectURI:
+      if (x.value.substring(0,2) == "_:") {
+        if (typeof this.blankNodes[x.value.substring(2)] === 'undefined') {
+          this.blankNodes[x.value.substring(2)] = new $rdf.BlankNode(x.value.substring(2))
+        }
+        return this.blankNodes[x.value.substring(2)]
+      }
+      return $rdf.sym(x.value)
+    case $rdf.RDFaProcessor.PlainLiteralURI:
+      return new $rdf.Literal(x.value, x.language || '')
+    case $rdf.RDFaProcessor.XMLLiteralURI:
+    case $rdf.RDFaProcessor.HTMLLiteralURI:
+      var string = ''
+      Object.keys(x.value).forEach(function(i) {
+        string += $rdf.Util.domToString(x.value[i], this.htmlOptions)
+      });
+      return new $rdf.Literal(string, '', new $rdf.NamedNode(x.type))
+    default:
+      return new $rdf.Literal(x.value, '', new $rdf.NamedNode(x.type))
+  }
+}
+
+$rdf.RDFaProcessor.prototype.resolveAndNormalize = function (base, uri) {
+  // console.log("Joining " + uri + " to " + base + " making " +  $rdf.uri.join(uri, base))
   return $rdf.uri.join(uri, base); // @@ normalize?
 }
 
@@ -4810,9 +4892,7 @@ $rdf.RDFaProcessor.deriveDateTimeType = function (value) {
   return null
 }
 
-$rdf.RDFaProcessor.prototype.process = function (node, processOptions) {
-  console.log('node.baseURI 0 ' + node.baseURI)
-
+$rdf.RDFaProcessor.prototype.process = function (node, options) {
   /*
   if (!window.console) {
      window.console = { log: function() {} }
@@ -4829,11 +4909,22 @@ $rdf.RDFaProcessor.prototype.process = function (node, processOptions) {
   var queue = []
 
   // Fix for Firefox that includes the hash in the base URI
-  var removeHash = function (baseURI) {
-    return baseURI.split('#')[0]
+  var removeHash = function(baseURI) {
+    // Fix for undefined baseURI property
+    if (!baseURI && options && options.baseURI) {
+      return options.baseURI;
+    }
+
+    var hash = baseURI.indexOf("#");
+    if (hash>=0) {
+      baseURI = baseURI.substring(0,hash);
+    }
+    if (options && options.baseURIMap) {
+      baseURI = options.baseURIMap(baseURI);
+    }
+    return baseURI;
   }
 
-  console.log('node.baseURI 1 ' + node.baseURI)
   queue.push({ current: node, context: this.push(null, removeHash(node.baseURI))})
   while (queue.length > 0) {
     var item = queue.shift()
@@ -4882,7 +4973,6 @@ $rdf.RDFaProcessor.prototype.process = function (node, processOptions) {
     var vocabulary = context.vocabulary
 
     // TODO: the "base" element may be used for HTML+RDFa 1.1
-    // console.log("sdf current.baseURI "+current.baseURI)
     var base = this.parseURI(removeHash(current.baseURI))
     current.item = null
 
@@ -4994,11 +5084,9 @@ $rdf.RDFaProcessor.prototype.process = function (node, processOptions) {
       }
       if (!newSubject) {
         if (current.parentNode.nodeType == Node.DOCUMENT_NODE) {
-          console.log('kjkhk current.baseURI ' + current.baseURI)
           newSubject = removeHash(current.baseURI)
         } else if (context.parentObject) {
           // TODO: Verify: If the xml:base has been set and the parentObject is the baseURI of the parent, then the subject needs to be the new base URI
-          console.log('zxcv current.baseURI ' + current.parentNode.baseURI)
           newSubject = removeHash(current.parentNode.baseURI) == context.parentObject ? removeHash(current.baseURI) : context.parentObject
         }
       }
@@ -5101,7 +5189,7 @@ $rdf.RDFaProcessor.prototype.process = function (node, processOptions) {
         if (typeofAtt && !aboutAtt && !resourceAtt && currentObjectResource) {
           id = currentObjectResource
         }
-        console.log('Setting data attribute for ' + current.localName + ' for subject ' + id)
+        //console.log("Setting data attribute for "+current.localName+" for subject "+id)
         this.newSubjectOrigin(current, id)
       }
     }
@@ -5289,7 +5377,7 @@ $rdf.RDFaProcessor.prototype.process = function (node, processOptions) {
       childContext.vocabulary = vocabulary
     }
     if (listMappingDifferent) {
-      console.log('Pushing list parent ' + current.localName)
+      //console.log("Pushing list parent "+current.localName)
       queue.unshift({ parent: current, context: context, subject: listSubject, listMapping: listMapping})
     }
     for (var child = current.lastChild; child; child = child.previousSibling) {
@@ -5327,14 +5415,12 @@ $rdf.RDFaProcessor.prototype.push = function (parent, subject) {
 }
 // ///////////////
 
-$rdf.parseDOM_RDFa = function (dom, kb, base) {
+$rdf.parseRDFaDOM = function (dom, kb, base) {
   var p = new $rdf.RDFaProcessor(kb, { 'base': base })
-  dom.baseURI = base // @@ weird
-  console.log(' $rdf.parseDOM_RDFa dom.baseURI = ' + dom.baseURI)
+  dom.baseURI = base
   p.process(dom)
 }
-// /////////////////
-// Parse a simple SPARL-Update subset syntax for patches.
+// /////////////////// Parse a simple SPARL-Update subset syntax for patches.
 //
 //  This parses
 //   WHERE {xxx} DELETE {yyy} INSERT DATA {zzz}
@@ -6954,9 +7040,13 @@ $rdf.SPARQLResultsInterpreter = function (xml, callback, doneCallback) {
 // 2010-08-08 TimBL folded in Kenny's WEBDAV
 // 2010-12-07 TimBL addred local file write code
 
-$rdf.sparqlUpdate = (function () {
+$rdf.UpdateManager = (function () {
   var sparql = function (store) {
     this.store = store
+    if (store.updater){
+      throw("You can't have two UpdateManagers for the same store")
+    }
+    store.updater = this
     this.ifps = {}
     this.fps = {}
     this.ns = {}
@@ -6989,11 +7079,12 @@ $rdf.sparqlUpdate = (function () {
       return false // Eg subject is bnode, no known doc to write to
     }
     if (!kb) {
-      kb = tabulator.kb
+      kb = this.store
     }
 
     if (uri.slice(0, 8) === 'file:///') {
-      if (kb.holds(kb.sym(uri), tabulator.ns.rdf('type'), tabulator.ns.link('MachineEditableDocument'))) {
+      if (kb.holds(kb.sym(uri), $rdf.sym('http://www.w3.org/1999/02/22-rdf-syntax-ns#type'),
+        $rdf.sym('http://www.w3.org/2007/ont/link#MachineEditableDocument'))) {
         return 'LOCALFILE'
       }
 
@@ -7091,7 +7182,7 @@ $rdf.sparqlUpdate = (function () {
   // A list of all bnodes occuring in a list of statements
   sparql.prototype._statement_array_bnodes = function (sts) {
     var bnodes = []
-    for (var i = 0; i < sts.length;i++) {
+    for (var i = 0; i < sts.length; i++) {
       bnodes = bnodes.concat(this._statement_bnodes(sts[i]))
     }
     bnodes.sort() // in place sort - result may have duplicates
@@ -7287,7 +7378,7 @@ $rdf.sparqlUpdate = (function () {
 
     if (st instanceof Array) {
       var stText = ''
-      for (var i = 0;i < st.length;i++) stText += st[i] + '\n'
+      for (var i = 0; i < st.length; i++) stText += st[i] + '\n'
       query += 'INSERT DATA { ' + stText + ' }\n'
     } else {
       query += 'INSERT DATA { ' +
@@ -7305,7 +7396,7 @@ $rdf.sparqlUpdate = (function () {
 
     if (st instanceof Array) {
       var stText = ''
-      for (var i = 0;i < st.length;i++) stText += st[i] + '\n'
+      for (var i = 0; i < st.length; i++) stText += st[i] + '\n'
       query += 'DELETE DATA { ' + stText + ' }\n'
     } else {
       query += 'DELETE DATA { ' +
@@ -7348,7 +7439,7 @@ $rdf.sparqlUpdate = (function () {
   }
 
   sparql.prototype.getUpdatesVia = function (doc) {
-    var linkHeaders = tabulator.fetcher.getHeader(doc, 'updates-via')
+    var linkHeaders = this.store.fetcher.getHeader(doc, 'updates-via')
     if (!linkHeaders || !linkHeaders.length) return null
     return linkHeaders[0].trim()
   }
@@ -7361,7 +7452,7 @@ $rdf.sparqlUpdate = (function () {
   }
 
   sparql.prototype.reloadAndSync = function (doc) {
-    var control = tabulator.sparql.patchControlFor(doc)
+    var control = this.patchControlFor(doc)
 
     if (control.reloading) {
       console.log('   Already reloading - stop')
@@ -7371,7 +7462,7 @@ $rdf.sparqlUpdate = (function () {
     var retryTimeout = 1000 // ms
     var tryReload = function () {
       console.log('try reload - timeout = ' + retryTimeout)
-      tabulator.sparql.reload(tabulator.kb, doc, function (ok, message, xhr) {
+      this.reload(this.store, doc, function (ok, message, xhr) {
         control.reloading = false
         if (ok) {
           if (control.downstreamChangeListeners) {
@@ -7406,8 +7497,11 @@ $rdf.sparqlUpdate = (function () {
   // Alternative is addDownstreamChangeListener(), where you do not
   // have to do the reload yourslf. Do mot mix them.
   //
+  //  kb contains the HTTP  metadata from prefvious operations
+  //
   sparql.prototype.setRefreshHandler = function (doc, handler) {
     var wssURI = this.getUpdatesVia(doc) // relative
+    var kb = this.store
     var theHandler = handler
     var self = this
     var updater = this
@@ -7499,294 +7593,279 @@ $rdf.sparqlUpdate = (function () {
   //  - callback is called as callback(uri, success, errorbody)
   //
   sparql.prototype.update = function (deletions, insertions, callback) {
-    var kb = this.store
-    var ds = !deletions ? []
-      : deletions instanceof $rdf.IndexedFormula ? deletions.statements
-        : deletions instanceof Array ? deletions : [ deletions ]
-    var is = !insertions ? []
-      : insertions instanceof $rdf.IndexedFormula ? insertions.statements
-        : insertions instanceof Array ? insertions : [ insertions ]
-    if (!(ds instanceof Array)) {
-      throw new Error('Type Error ' + (typeof ds) + ': ' + ds)
-    }
-    if (!(is instanceof Array)) {
-      throw new Error('Type Error ' + (typeof is) + ': ' + is)
-    }
-    if (ds.length === 0 && is.length === 0) {
-      return callback(null, true) // success -- nothing needed to be done.
-    }
-    var doc = ds.length ? ds[0].why : is[0].why
-    var control = this.patchControlFor(doc)
-    var startTime = Date.now()
+    try {
+      var kb = this.store
+      var ds = !deletions ? []
+        : deletions instanceof $rdf.IndexedFormula ? deletions.statements
+          : deletions instanceof Array ? deletions : [ deletions ]
+      var is = !insertions ? []
+        : insertions instanceof $rdf.IndexedFormula ? insertions.statements
+          : insertions instanceof Array ? insertions : [ insertions ]
+      if (!(ds instanceof Array)) {
+        throw new Error('Type Error ' + (typeof ds) + ': ' + ds)
+      }
+      if (!(is instanceof Array)) {
+        throw new Error('Type Error ' + (typeof is) + ': ' + is)
+      }
+      if (ds.length === 0 && is.length === 0) {
+        return callback(null, true) // success -- nothing needed to be done.
+      }
+      var doc = ds.length ? ds[0].why : is[0].why
+      var control = this.patchControlFor(doc)
+      var startTime = Date.now()
 
-    var props = ['subject', 'predicate', 'object', 'why']
-    var verbs = ['insert', 'delete']
-    var clauses = { 'delete': ds, 'insert': is }
-    verbs.map(function (verb) {
-      clauses[verb].map(function (st) {
-        if (!doc.sameTerm(st.why)) {
-          throw new Error('update: destination ' + doc +
-            ' inconsistent with delete quad ' + st.why)
-        }
-        props.map(function (prop) {
-          if (typeof st[prop] === 'undefined') {
-            throw new Error('update: undefined ' + prop + ' of statement.')
+      var props = ['subject', 'predicate', 'object', 'why']
+      var verbs = ['insert', 'delete']
+      var clauses = { 'delete': ds, 'insert': is }
+      verbs.map(function (verb) {
+        clauses[verb].map(function (st) {
+          if (!doc.sameTerm(st.why)) {
+            throw new Error('update: destination ' + doc +
+              ' inconsistent with delete quad ' + st.why)
           }
+          props.map(function (prop) {
+            if (typeof st[prop] === 'undefined') {
+              throw new Error('update: undefined ' + prop + ' of statement.')
+            }
+          })
         })
       })
-    })
 
-    /*
-    })
-
-    ds.map(function(st){
-        if (!doc.sameTerm(st.why)) {
-            throw "Update: destination "+doc+" inconsistent with delete quad "+st.why
-        }
-        props.map(function(prop){
-            if (typeof ds[prop] === 'undefined') {
-                throw "Update: undefined "+prop+" of statement."
+      var protocol = this.editable(doc.uri, kb)
+      if (!protocol) {
+        throw new Error("Can't make changes in uneditable " + doc)
+      }
+      var i
+      var newSts
+      var documentString
+      var sz
+      if (protocol.indexOf('SPARQL') >= 0) {
+        var bnodes = []
+        if (ds.length) bnodes = this._statement_array_bnodes(ds)
+        if (is.length) bnodes = bnodes.concat(this._statement_array_bnodes(is))
+        var context = this._bnode_context(bnodes, doc)
+        var whereClause = this._context_where(context)
+        var query = ''
+        if (whereClause.length) { // Is there a WHERE clause?
+          if (ds.length) {
+            query += 'DELETE { '
+            for (i = 0; i < ds.length; i++) {
+              query += this.anonymizeNT(ds[i]) + '\n'
             }
-        })
-
-    })
-    is.map(function(st){i
-        f (!doc.sameTerm(st.why))
-            throw "sparql update: destination = "+doc+" inconsistent with insert st.why ="+st.why
-        }
-    })
-    */
-
-    var protocol = this.editable(doc.uri, kb)
-    if (!protocol) {
-      throw new Error("Can't make changes in uneditable " + doc)
-    }
-    var i
-    var newSts
-    var documentString
-    var sz
-    if (protocol.indexOf('SPARQL') >= 0) {
-      var bnodes = []
-      if (ds.length) bnodes = this._statement_array_bnodes(ds)
-      if (is.length) bnodes = bnodes.concat(this._statement_array_bnodes(is))
-      var context = this._bnode_context(bnodes, doc)
-      var whereClause = this._context_where(context)
-      var query = ''
-      if (whereClause.length) { // Is there a WHERE clause?
-        if (ds.length) {
-          query += 'DELETE { '
-          for (i = 0; i < ds.length; i++) {
-            query += this.anonymizeNT(ds[i]) + '\n'
+            query += ' }\n'
           }
-          query += ' }\n'
-        }
-        if (is.length) {
-          query += 'INSERT { '
-          for (i = 0; i < is.length; i++) {
-            query += this.anonymizeNT(is[i]) + '\n'
-          }
-          query += ' }\n'
-        }
-        query += whereClause
-      } else { // no where clause
-        if (ds.length) {
-          query += 'DELETE DATA { '
-          for (i = 0; i < ds.length; i++) {
-            query += this.anonymizeNT(ds[i]) + '\n'
-          }
-          query += ' } \n'
-        }
-        if (is.length) {
-          if (ds.length) query += ' ; '
-          query += 'INSERT DATA { '
-          for (i = 0; i < is.length; i++) {
-            query += this.anonymizeNT(is[i]) + '\n'
-          }
-          query += ' }\n'
-        }
-      }
-      // Track pending upstream patches until they have fnished their callback
-      control.pendingUpstream = control.pendingUpstream ? control.pendingUpstream + 1 : 1
-      if (typeof control.upstreamCount !== 'undefined') {
-        control.upstreamCount += 1 // count changes we originated ourselves
-      }
-
-      this._fire(doc.uri, query,
-        function (uri, success, body, xhr) {
-          xhr.elapsedTime_ms = Date.now() - startTime
-          console.log('    sparql: Return ' + (success ? 'success' : 'FAILURE ' + xhr.status) +
-            ' elapsed ' + xhr.elapsedTime_ms + 'ms')
-          if (success) {
-            try {
-              kb.remove(ds)
-            } catch (e) {
-              success = false
-              body = 'Remote Ok BUT error deleting ' + ds.length + ' from store!!! ' + e
-            } // Add in any case -- help recover from weirdness??
-            for (var i = 0; i < is.length;i++) {
-              kb.add(is[i].subject, is[i].predicate, is[i].object, doc)
+          if (is.length) {
+            query += 'INSERT { '
+            for (i = 0; i < is.length; i++) {
+              query += this.anonymizeNT(is[i]) + '\n'
             }
+            query += ' }\n'
           }
-
-          callback(uri, success, body, xhr)
-          control.pendingUpstream -= 1
-          // When upstream patches have been sent, reload state if downstream waiting
-          if (control.pendingUpstream === 0 && control.downstreamAction) {
-            var downstreamAction = control.downstreamAction
-            delete control.downstreamAction
-            console.log('delayed downstream action:')
-            downstreamAction(doc)
+          query += whereClause
+        } else { // no where clause
+          if (ds.length) {
+            query += 'DELETE DATA { '
+            for (i = 0; i < ds.length; i++) {
+              query += this.anonymizeNT(ds[i]) + '\n'
+            }
+            query += ' } \n'
           }
-        })
-    } else if (protocol.indexOf('DAV') >= 0) {
-      // The code below is derived from Kenny's UpdateCenter.js
-      documentString
-      var request = kb.any(doc, this.ns.link('request'))
-      if (!request) {
-        throw new Error('No record of our HTTP GET request for document: ' +
-          doc)
-      } // should not happen
-      var response = kb.any(request, this.ns.link('response'))
-      if (!response) {
-        return null // throw "No record HTTP GET response for document: "+doc
-      }
-      var content_type = kb.the(response, this.ns.httph('content-type')).value
+          if (is.length) {
+            if (ds.length) query += ' ; '
+            query += 'INSERT DATA { '
+            for (i = 0; i < is.length; i++) {
+              query += this.anonymizeNT(is[i]) + '\n'
+            }
+            query += ' }\n'
+          }
+        }
+        // Track pending upstream patches until they have fnished their callback
+        control.pendingUpstream = control.pendingUpstream ? control.pendingUpstream + 1 : 1
+        if (typeof control.upstreamCount !== 'undefined') {
+          control.upstreamCount += 1 // count changes we originated ourselves
+        }
 
-      // prepare contents of revised document
-      newSts = kb.statementsMatching(undefined, undefined, undefined, doc).slice() // copy!
-      for (i = 0; i < ds.length; i++) {
-        $rdf.Util.RDFArrayRemove(newSts, ds[i])
-      }
-      for (i = 0; i < is.length; i++) {
-        newSts.push(is[i])
-      }
+        this._fire(doc.uri, query,
+          function (uri, success, body, xhr) {
+            xhr.elapsedTime_ms = Date.now() - startTime
+            console.log('    sparql: Return ' + (success ? 'success' : 'FAILURE ' + xhr.status) +
+              ' elapsed ' + xhr.elapsedTime_ms + 'ms')
+            if (success) {
+              try {
+                kb.remove(ds)
+              } catch (e) {
+                success = false
+                body = 'Remote Ok BUT error deleting ' + ds.length + ' from store!!! ' + e
+              } // Add in any case -- help recover from weirdness??
+              for (var i = 0; i < is.length; i++) {
+                kb.add(is[i].subject, is[i].predicate, is[i].object, doc)
+              }
+            }
 
-      // serialize to te appropriate format
-      sz = $rdf.Serializer(kb)
-      sz.suggestNamespaces(kb.namespaces)
-      sz.setBase(doc.uri) // ?? beware of this - kenny (why? tim)
-      switch (content_type) {
-        case 'application/rdf+xml':
-          documentString = sz.statementsToXML(newSts)
-          break
-        case 'text/n3':
-        case 'text/turtle':
-        case 'application/x-turtle': // Legacy
-        case 'application/n3': // Legacy
-          documentString = sz.statementsToN3(newSts)
-          break
-        default:
-          throw new Error('Content-type ' + content_type + ' not supported for data write')
-      }
+            callback(uri, success, body, xhr)
+            control.pendingUpstream -= 1
+            // When upstream patches have been sent, reload state if downstream waiting
+            if (control.pendingUpstream === 0 && control.downstreamAction) {
+              var downstreamAction = control.downstreamAction
+              delete control.downstreamAction
+              console.log('delayed downstream action:')
+              downstreamAction(doc)
+            }
+          })
+      } else if (protocol.indexOf('DAV') >= 0) {
+        // The code below is derived from Kenny's UpdateCenter.js
+        documentString
+        var request = kb.any(doc, this.ns.link('request'))
+        if (!request) {
+          throw new Error('No record of our HTTP GET request for document: ' +
+            doc)
+        } // should not happen
+        var response = kb.any(request, this.ns.link('response'))
+        if (!response) {
+          return null // throw "No record HTTP GET response for document: "+doc
+        }
+        var content_type = kb.the(response, this.ns.httph('content-type')).value
 
-      // Write the new version back
+        // prepare contents of revised document
+        newSts = kb.statementsMatching(undefined, undefined, undefined, doc).slice() // copy!
+        for (i = 0; i < ds.length; i++) {
+          $rdf.Util.RDFArrayRemove(newSts, ds[i])
+        }
+        for (i = 0; i < is.length; i++) {
+          newSts.push(is[i])
+        }
 
-      var candidateTarget = kb.the(response, this.ns.httph('content-location'))
-      if (candidateTarget) {
-        targetURI = $rdf.uri.join(candidateTarget.value, targetURI)
-      }
-      var xhr = $rdf.Util.XMLHTTPFactory()
-      xhr.options = {}
-      xhr.onreadystatechange = function () {
-        if (xhr.readyState === 4) {
-          // formula from sparqlUpdate.js, what about redirects?
-          var success = (!xhr.status || (xhr.status >= 200 && xhr.status < 300))
-          if (success) {
-            for (var i = 0; i < ds.length; i++) {
+        // serialize to te appropriate format
+        sz = $rdf.Serializer(kb)
+        sz.suggestNamespaces(kb.namespaces)
+        sz.setBase(doc.uri) // ?? beware of this - kenny (why? tim)
+        switch (content_type) {
+          case 'application/rdf+xml':
+            documentString = sz.statementsToXML(newSts)
+            break
+          case 'text/n3':
+          case 'text/turtle':
+          case 'application/x-turtle': // Legacy
+          case 'application/n3': // Legacy
+            documentString = sz.statementsToN3(newSts)
+            break
+          default:
+            throw new Error('Content-type ' + content_type + ' not supported for data write')
+        }
+
+        // Write the new version back
+
+        var candidateTarget = kb.the(response, this.ns.httph('content-location'))
+        var targetURI
+        if (candidateTarget) {
+          targetURI = $rdf.uri.join(candidateTarget.value, targetURI)
+        }
+        var xhr = $rdf.Util.XMLHTTPFactory()
+        xhr.options = {}
+        xhr.onreadystatechange = function () {
+          if (xhr.readyState === 4) {
+            // formula from sparqlUpdate.js, what about redirects?
+            var success = (!xhr.status || (xhr.status >= 200 && xhr.status < 300))
+            if (success) {
+              for (var i = 0; i < ds.length; i++) {
+                kb.remove(ds[i])
+              }
+              for (i = 0; i < is.length; i++) {
+                kb.add(is[i].subject, is[i].predicate, is[i].object, doc)
+              }
+            }
+            callback(doc.uri, success, xhr.responseText)
+          }
+        }
+        xhr.open('PUT', targetURI, true)
+        // assume the server does PUT content-negotiation.
+        xhr.setRequestHeader('Content-type', content_type) // OK?
+        xhr.send(documentString)
+      } else {
+        if (protocol.indexOf('LOCALFILE') >= 0) {
+          try {
+            console.log('Writing back to local file\n')
+            // See http://simon-jung.blogspot.com/2007/10/firefox-extension-file-io.html
+            // prepare contents of revised document
+            newSts = kb.statementsMatching(undefined, undefined, undefined, doc).slice() // copy!
+            for (i = 0; i < ds.length; i++) {
+              $rdf.Util.RDFArrayRemove(newSts, ds[i])
+            }
+            for (i = 0; i < is.length; i++) {
+              newSts.push(is[i])
+            }
+            // serialize to the appropriate format
+            documentString
+            sz = $rdf.Serializer(kb)
+            sz.suggestNamespaces(kb.namespaces)
+            sz.setBase(doc.uri) // ?? beware of this - kenny (why? tim)
+            var dot = doc.uri.lastIndexOf('.')
+            if (dot < 1) {
+              throw new Error('Rewriting file: No filename extension: ' + doc.uri)
+            }
+            var ext = doc.uri.slice(dot + 1)
+            switch (ext) {
+              case 'rdf':
+              case 'owl': // Just my experence   ...@@ we should keep the format in which it was parsed
+              case 'xml':
+                documentString = sz.statementsToXML(newSts)
+                break
+              case 'n3':
+              case 'nt':
+              case 'ttl':
+                documentString = sz.statementsToN3(newSts)
+                break
+              default:
+                throw new Error('File extension .' + ext + ' not supported for data write')
+            }
+            // Write the new version back
+            // create component for file writing
+            console.log('Writing back: <<<' + documentString + '>>>')
+            var filename = doc.uri.slice(7) // chop off   file://  leaving /path
+            // console.log("Writeback: Filename: "+filename+"\n")
+            var file = Components.classes['@mozilla.org/file/local;1']
+              .createInstance(Components.interfaces.nsILocalFile)
+            file.initWithPath(filename)
+            if (!file.exists()) {
+              throw new Error('Rewriting file <' + doc.uri +
+                '> but it does not exist!')
+            }
+            // {
+            // file.create( Components.interfaces.nsIFile.NORMAL_FILE_TYPE, 420)
+            // }
+            // create file output stream and use write/create/truncate mode
+            // 0x02 writing, 0x08 create file, 0x20 truncate length if exist
+            var stream = Components.classes['@mozilla.org/network/file-output-stream;1']
+              .createInstance(Components.interfaces.nsIFileOutputStream)
+
+            // Various JS systems object to 0666 in struct mode as dangerous
+            stream.init(file, 0x02 | 0x08 | 0x20, parseInt('0666', 8), 0)
+
+            // write data to file then close output stream
+            stream.write(documentString, documentString.length)
+            stream.close()
+
+            for (i = 0; i < ds.length; i++) {
               kb.remove(ds[i])
             }
             for (i = 0; i < is.length; i++) {
               kb.add(is[i].subject, is[i].predicate, is[i].object, doc)
             }
+            callback(doc.uri, true, '') // success!
+          } catch (e) {
+            callback(doc.uri, false,
+              'Exception trying to write back file <' + doc.uri + '>\n'
+              // + tabulator.Util.stackString(e))
+            )
           }
-          callback(doc.uri, success, xhr.responseText)
+        } else {
+          throw new Error("Unhandled edit method: '" + protocol + "' for " + doc)
         }
       }
-      xhr.open('PUT', targetURI, true)
-      // assume the server does PUT content-negotiation.
-      xhr.setRequestHeader('Content-type', content_type) // OK?
-      xhr.send(documentString)
-    } else {
-      if (protocol.indexOf('LOCALFILE') >= 0) {
-        try {
-          console.log('Writing back to local file\n')
-          // See http://simon-jung.blogspot.com/2007/10/firefox-extension-file-io.html
-          // prepare contents of revised document
-          newSts = kb.statementsMatching(undefined, undefined, undefined, doc).slice() // copy!
-          for (i = 0; i < ds.length; i++) {
-            $rdf.Util.RDFArrayRemove(newSts, ds[i])
-          }
-          for (i = 0; i < is.length; i++) {
-            newSts.push(is[i])
-          }
-          // serialize to the appropriate format
-          documentString
-          sz = $rdf.Serializer(kb)
-          sz.suggestNamespaces(kb.namespaces)
-          sz.setBase(doc.uri) // ?? beware of this - kenny (why? tim)
-          var dot = doc.uri.lastIndexOf('.')
-          if (dot < 1) {
-            throw new Error('Rewriting file: No filename extension: ' + doc.uri)
-          }
-          var ext = doc.uri.slice(dot + 1)
-          switch (ext) {
-            case 'rdf':
-            case 'owl': // Just my experence   ...@@ we should keep the format in which it was parsed
-            case 'xml':
-              documentString = sz.statementsToXML(newSts)
-              break
-            case 'n3':
-            case 'nt':
-            case 'ttl':
-              documentString = sz.statementsToN3(newSts)
-              break
-            default:
-              throw new Error('File extension .' + ext + ' not supported for data write')
-          }
-          // Write the new version back
-          // create component for file writing
-          dump('Writing back: <<<' + documentString + '>>>\n')
-          var filename = doc.uri.slice(7) // chop off   file://  leaving /path
-          // console.log("Writeback: Filename: "+filename+"\n")
-          var file = Components.classes['@mozilla.org/file/local;1']
-            .createInstance(Components.interfaces.nsILocalFile)
-          file.initWithPath(filename)
-          if (!file.exists()) {
-            throw new Error('Rewriting file <' + doc.uri +
-              '> but it does not exist!')
-          }
-          // {
-          // file.create( Components.interfaces.nsIFile.NORMAL_FILE_TYPE, 420)
-          // }
-          // create file output stream and use write/create/truncate mode
-          // 0x02 writing, 0x08 create file, 0x20 truncate length if exist
-          var stream = Components.classes['@mozilla.org/network/file-output-stream;1']
-            .createInstance(Components.interfaces.nsIFileOutputStream)
-
-          // Various JS systems object to 0666 in struct mode as dangerous
-          stream.init(file, 0x02 | 0x08 | 0x20, parseInt('0666', 8), 0)
-
-          // write data to file then close output stream
-          stream.write(documentString, documentString.length)
-          stream.close()
-
-          for (i = 0; i < ds.length; i++) {
-            kb.remove(ds[i])
-          }
-          for (i = 0; i < is.length; i++) {
-            kb.add(is[i].subject, is[i].predicate, is[i].object, doc)
-          }
-          callback(doc.uri, true, '') // success!
-        } catch (e) {
-          callback(doc.uri, false,
-            'Exception trying to write back file <' + doc.uri + '>\n' +
-            tabulator.Util.stackString(e))
-        }
-      } else {
-        throw new Error("Unhandled edit method: '" + protocol + "' for " + doc)
-      }
+    } catch (e) {
+      callback(undefined, false, 'Exception in update: ' + e)
     }
-  }
+  } // wnd update
 
   // This suitable for an inital creation of a document
   //
@@ -7863,7 +7942,7 @@ $rdf.sparqlUpdate = (function () {
           xhr.onErrorWasCalled + ' status: ' + xhr.status)
         callback(false, 'Non-HTTP error reloading data: ' + body, xhr)
       } else {
-        elapsedTime_ms = Date.now() - startTime
+        var elapsedTime_ms = Date.now() - startTime
         if (!doc.reloadTime_total) doc.reloadTime_total = 0
         if (!doc.reloadTime_count) doc.reloadTime_count = 0
         doc.reloadTime_total += elapsedTime_ms
@@ -7896,7 +7975,7 @@ $rdf.sparqlUpdate = (function () {
           ' out of total statements ' + kb.statements.length)
         kb.remove(sts1)
         kb.add(sts2)
-        elapsedTime_ms = Date.now() - startTime
+        var elapsedTime_ms = Date.now() - startTime
         if (sts2.length === 0) {
           console.log('????????????????? 0000000')
         }
@@ -8266,13 +8345,17 @@ __Serializer.prototype.statementsToN3 = function(sts) {
     var indent = 4;
     var width = 80;
 
-    var predMap = {
-        'http://www.w3.org/2002/07/owl#sameAs': '=',
-        'http://www.w3.org/2000/10/swap/log#implies': '=>',
-        'http://www.w3.org/1999/02/22-rdf-syntax-ns#type': 'a'
+    var predMap = {}
+
+    if (this.flags.indexOf('s') < 0 ){
+      predMap['http://www.w3.org/2002/07/owl#sameAs'] = '='
     }
-
-
+    if (this.flags.indexOf('t') < 0 ){
+      predMap['http://www.w3.org/1999/02/22-rdf-syntax-ns#type'] = 'a'
+    }
+    if (this.flags.indexOf('i') < 0 ){
+      predMap['http://www.w3.org/2000/10/swap/log#implies'] = '=>'
+    }
 
 
     ////////////////////////// Arrange the bits of text
@@ -9191,7 +9274,7 @@ if ((typeof module !== 'undefined' && module !== null ? module.exports : void 0)
  * needs: util.js uri.js term.js rdfparser.js rdfa.js n3parser.js
  *      identity.js sparql.js jsonparser.js
  *
- * If jQuery is defined, it uses jQuery.ajax, else is independent of jQuery
+ * Independent of jQuery
  */
 
 /**
@@ -9201,14 +9284,14 @@ if ((typeof module !== 'undefined' && module !== null ? module.exports : void 0)
  * Firing up a mail client for mid:  (message:) URLs
  */
 
-var asyncLib = require('async')
+var asyncLib = require('async') // @@ Goal: remove this dependency
 var jsonld = require('jsonld')
-var N3 = require('n3')
+var N3 = require('n3')  // @@ Goal: remove this dependency
 
 $rdf.Fetcher = function (store, timeout, async) {
   this.store = store
   this.thisURI = 'http://dig.csail.mit.edu/2005/ajar/ajaw/rdf/sources.js' + '#SourceFetcher' // -- Kenny
-  this.timeout = timeout ? timeout : 30000
+  this.timeout = timeout || 30000
   this.async = async != null ? async : true
   this.appNode = this.store.bnode() // Denoting this session
   this.store.fetcher = this // Bi-linked
@@ -9222,13 +9305,13 @@ $rdf.Fetcher = function (store, timeout, async) {
   //   'redirected'  In attempt to counter CORS problems retried.
   //   other strings mean various other erros, such as parse errros.
   //
-
+  this.redirectedTo = {} // Wehn 'redireced'
   this.fetchCallbacks = {} // fetchCallbacks[uri].push(callback)
 
   this.nonexistant = {} // keep track of explict 404s -> we can overwrite etc
   this.lookedUp = {}
   this.handlers = []
-  this.mediatypes = {}
+  this.mediatypes = { }
   var sf = this
   var kb = this.store
   var ns = {} // Convenience namespaces needed in this module:
@@ -9243,6 +9326,10 @@ $rdf.Fetcher = function (store, timeout, async) {
   ns.rdfs = $rdf.Namespace('http://www.w3.org/2000/01/rdf-schema#')
   ns.dc = $rdf.Namespace('http://purl.org/dc/elements/1.1/')
 
+  sf.mediatypes['image/*'] = {
+    'q': 0.9
+  }
+
   $rdf.Fetcher.crossSiteProxy = function (uri) {
     if ($rdf.Fetcher.crossSiteProxyTemplate) {
       return $rdf.Fetcher.crossSiteProxyTemplate.replace('{uri}', encodeURIComponent(uri))
@@ -9250,6 +9337,7 @@ $rdf.Fetcher = function (store, timeout, async) {
       return undefined
     }
   }
+
   $rdf.Fetcher.RDFXMLHandler = function (args) {
     if (args) {
       this.dom = args[0]
@@ -9264,19 +9352,15 @@ $rdf.Fetcher = function (store, timeout, async) {
           sf.failFetch(xhr, 'Badly formed XML in ' + xhr.resource.uri) // have to fail the request
           throw new Error('Badly formed XML in ' + xhr.resource.uri) // @@ Add details
         }
-        // Find the last URI we actual URI in a series of redirects
-        // (xhr.resource.uri is the original one)
-        var lastRequested = kb.any(xhr.req, ns.link('requestedURI'))
-        if (!lastRequested) {
-          lastRequested = xhr.resource
-        } else {
-          lastRequested = kb.sym(lastRequested.value)
-        }
         var parser = new $rdf.RDFParser(kb)
-        // sf.addStatus(xhr.req, 'parsing as RDF/XML...')
-        parser.parse(this.dom, lastRequested.uri, lastRequested)
+        try {
+          parser.parse(this.dom, xhr.original.uri, xhr.original)
+        } catch (e) {
+          sf.addStatus(xhr.req, 'Syntax error parsing RDF/XML! ' + e)
+          console.log('Syntax error parsing RDF/XML! ' + e)
+        }
         if (!xhr.options.noMeta) {
-          kb.add(lastRequested, ns.rdf('type'), ns.link('RDFDocument'), sf.appNode)
+          kb.add(xhr.original, ns.rdf('type'), ns.link('RDFDocument'), sf.appNode)
         }
         cb()
       }
@@ -9336,31 +9420,16 @@ $rdf.Fetcher = function (store, timeout, async) {
         for (var i = 0; i < scripts.length; i++) {
           var contentType = scripts[i].getAttribute('type')
           if ($rdf.parsable[contentType]) {
-            $rdf.parse(scripts[i].textContent, kb, xhr.resource.uri, contentType)
+            $rdf.parse(scripts[i].textContent, kb, xhr.original.uri, contentType)
           }
         }
 
-        // GRDDL
-        /*
-        var head = this.dom.getElementsByTagName('head')[0]
-        if (head) {
-            var profile = head.getAttribute('profile')
-            if (profile && $rdf.uri.protocol(profile) === 'http') {
-                // $rdf.log.info("GRDDL: Using generic " + "2003/11/rdf-in-xhtml-processor.")
-                 $rdf.Fetcher.doGRDDL(kb, xhr.resource, "http://www.w3.org/2003/11/rdf-in-xhtml-processor", xhr.resource.uri)
-
-            } else {
-                // $rdf.log.info("GRDDL: No GRDDL profile in " + xhr.resource)
-            }
-        }
-        */
         if (!xhr.options.noMeta) {
           kb.add(xhr.resource, ns.rdf('type'), ns.link('WebPage'), sf.appNode)
         }
-        // Do RDFa here
 
-        if ($rdf.parseDOM_RDFa) {
-          $rdf.parseDOM_RDFa(this.dom, kb, xhr.resource.uri)
+        if (xhr.options.doRDFa && $rdf.parseRDFaDOM) {
+          $rdf.parseRDFaDOM(this.dom, kb, xhr.original)
         }
         cb() // Fire done callbacks
       }
@@ -9370,16 +9439,13 @@ $rdf.Fetcher = function (store, timeout, async) {
     return 'XHTMLHandler'
   }
   $rdf.Fetcher.XHTMLHandler.register = function (sf) {
-    sf.mediatypes['application/xhtml+xml'] = {
-      'q': 0.3
-    }
+    sf.mediatypes['application/xhtml+xml'] = {}
   }
   $rdf.Fetcher.XHTMLHandler.pattern = new RegExp('application/xhtml')
 
   $rdf.Fetcher.XMLHandler = function () {
     this.handlerFactory = function (xhr) {
       xhr.handle = function (cb) {
-        var kb = sf.store
         var dom = $rdf.Util.parseXML(xhr.responseText)
 
         // XML Semantics defined by root element namespace
@@ -9499,8 +9565,9 @@ $rdf.Fetcher = function (store, timeout, async) {
           cb() // doneFetch, not failed
           return
         }
-
-        sf.failFetch(xhr, "Sorry, can't yet parse non-XML HTML")
+        sf.addStatus(xhr.req, 'non-XML HTML document, not parsed for data.')
+        sf.doneFetch(xhr)
+        // sf.failFetch(xhr, "Sorry, can't yet parse non-XML HTML")
       }
     }
   }
@@ -9539,7 +9606,7 @@ $rdf.Fetcher = function (store, timeout, async) {
 
         // We give up finding semantics - this is not an error, just no data
         sf.addStatus(xhr.req, 'Plain text document, no known RDF semantics.')
-        sf.doneFetch(xhr, [xhr.resource.uri])
+        sf.doneFetch(xhr)
         //                sf.failFetch(xhr, "unparseable - text/plain not visibly XML")
         //                dump(xhr.resource + " unparseable - text/plain not visibly XML, starts:\n" + rt.slice(0, 500)+"\n")
       }
@@ -9560,10 +9627,10 @@ $rdf.Fetcher = function (store, timeout, async) {
     this.handlerFactory = function (xhr) {
       xhr.handle = function (cb) {
         // Parse the text of this non-XML file
-        $rdf.log.debug('web.js: Parsing as N3 ' + xhr.resource.uri) // @@@@ comment me out
+
+        // console.log('web.js: Parsing as N3 ' + xhr.resource.uri + ' base: ' + xhr.original.uri) // @@@@ comment me out
         // sf.addStatus(xhr.req, "N3 not parsed yet...")
-        var rt = xhr.responseText
-        var p = $rdf.N3Parser(kb, kb, xhr.resource.uri, xhr.resource.uri, null, null, '', null)
+        var p = $rdf.N3Parser(kb, kb, xhr.original.uri, xhr.original.uri, null, null, '', null)
         //                p.loadBuf(xhr.responseText)
         try {
           p.loadBuf(xhr.responseText)
@@ -9575,9 +9642,9 @@ $rdf.Fetcher = function (store, timeout, async) {
         }
 
         sf.addStatus(xhr.req, 'N3 parsed: ' + p.statementCount + ' triples in ' + p.lines + ' lines.')
-        sf.store.add(xhr.resource, ns.rdf('type'), ns.link('RDFDocument'), sf.appNode)
-        args = [xhr.resource.uri] // Other args needed ever?
-        sf.doneFetch(xhr, args)
+        sf.store.add(xhr.original, ns.rdf('type'), ns.link('RDFDocument'), sf.appNode)
+        var args = [xhr.original.uri] // Other args needed ever?
+        sf.doneFetch(xhr)
       }
     }
   }
@@ -9606,21 +9673,20 @@ $rdf.Fetcher = function (store, timeout, async) {
   }
 
   this.switchHandler = function (name, xhr, cb, args) {
-    var kb = this.store
-    var handler = null
+    var Handler = null
     for (var i = 0; i < this.handlers.length; i++) {
       if ('' + this.handlers[i] === name) {
-        handler = this.handlers[i]
+        Handler = this.handlers[i]
       }
     }
-    if (!handler) {
+    if (!Handler) {
       throw new Error('web.js: switchHandler: name=' + name + ' , this.handlers =' + this.handlers + '\n' +
-      'switchHandler: switching to ' + handler + '; sf=' + sf +
+      'switchHandler: switching to ' + Handler + '; sf=' + sf +
       '; typeof $rdf.Fetcher=' + typeof $rdf.Fetcher +
       ';\n\t $rdf.Fetcher.HTMLHandler=' + $rdf.Fetcher.HTMLHandler + '\n' +
       '\n\tsf.handlers=' + sf.handlers + '\n')
     }
-    (new handler(args)).handlerFactory(xhr)
+    (new Handler(args)).handlerFactory(xhr)
     xhr.handle(cb)
   }
 
@@ -9643,14 +9709,19 @@ $rdf.Fetcher = function (store, timeout, async) {
   this.failFetch = function (xhr, status) {
     this.addStatus(xhr.req, status)
     if (!xhr.options.noMeta) {
-      kb.add(xhr.resource, ns.link('error'), status)
+      kb.add(xhr.original, ns.link('error'), status)
     }
-    this.requested[$rdf.uri.docpart(xhr.resource.uri)] = xhr.status // changed 2015 was false
-    while (this.fetchCallbacks[xhr.resource.uri] && this.fetchCallbacks[xhr.resource.uri].length) {
-      this.fetchCallbacks[xhr.resource.uri].shift()(false, 'Fetch of <' + xhr.resource.uri + '> failed: ' + status, xhr)
+    if (!xhr.resource.sameTerm(xhr.original)) {
+      console.log('@@ Recording failure original ' + xhr.original + '( as ' + xhr.resource + ') : ' + xhr.status)
+    } else {
+      console.log('@@ Recording failure for ' + xhr.original + ': ' + xhr.status)
     }
-    delete this.fetchCallbacks[xhr.resource.uri]
-    this.fireCallbacks('fail', [xhr.requestedURI, status])
+    this.requested[$rdf.uri.docpart(xhr.original.uri)] = xhr.status // changed 2015 was false
+    while (this.fetchCallbacks[xhr.original.uri] && this.fetchCallbacks[xhr.original.uri].length) {
+      this.fetchCallbacks[xhr.original.uri].shift()(false, 'Fetch of <' + xhr.original.uri + '> failed: ' + status, xhr)
+    }
+    delete this.fetchCallbacks[xhr.original.uri]
+    this.fireCallbacks('fail', [xhr.original.uri, status])
     xhr.abort()
     return xhr
   }
@@ -9658,25 +9729,24 @@ $rdf.Fetcher = function (store, timeout, async) {
   // in the why part of the quad distinguish between HTML and HTTP header
   // Reverse is set iif the link was rev= as opposed to rel=
   this.linkData = function (xhr, rel, uri, why, reverse) {
-    var x = xhr.resource
     if (!uri) return
     var predicate
     // See http://www.w3.org/TR/powder-dr/#httplink for describedby 2008-12-10
-    var obj = kb.sym($rdf.uri.join(uri, xhr.resource.uri))
+    var obj = kb.sym($rdf.uri.join(uri, xhr.original.uri))
     if (rel === 'alternate' || rel === 'seeAlso' || rel === 'meta' || rel === 'describedby') {
-      if (obj.uri === xhr.resource.uri) return
+      if (obj.uri === xhr.original.uri) return
       predicate = ns.rdfs('seeAlso')
     } else if (rel === 'type') {
-      predicate = tabulator.ns.rdf('type')
+      predicate = $rdf.sym('http://www.w3.org/1999/02/22-rdf-syntax-ns#type')
     } else {
       // See https://www.iana.org/assignments/link-relations/link-relations.xml
       // Alas not yet in RDF yet for each predicate
       predicate = kb.sym($rdf.uri.join(rel, 'http://www.iana.org/assignments/link-relations/'))
     }
     if (reverse) {
-      kb.add(obj, predicate, xhr.resource, why)
+      kb.add(obj, predicate, xhr.original, why)
     } else {
-      kb.add(xhr.resource, predicate, obj, why)
+      kb.add(xhr.original, predicate, obj, why)
     }
   }
 
@@ -9690,7 +9760,6 @@ $rdf.Fetcher = function (store, timeout, async) {
       var paramexp = /[^\(\)<>@,;:"\/\[\]\?={} \t]+=(([^\(\)<>@,;:"\/\[\]\?={} \t]+)|("[^"]*"))/g
 
       var matches = link.match(linkexp)
-      var rels = {}
       for (var i = 0; i < matches.length; i++) {
         var split = matches[i].split('>')
         var href = split[0].substring(1)
@@ -9707,15 +9776,14 @@ $rdf.Fetcher = function (store, timeout, async) {
     }
   }
 
-  this.doneFetch = function (xhr, args) {
+  this.doneFetch = function (xhr) {
     this.addStatus(xhr.req, 'Done.')
-    // $rdf.log.info("Done with parse, firing 'done' callbacks for " + xhr.resource)
-    this.requested[xhr.resource.uri] = 'done' // Kenny
-    while (this.fetchCallbacks[xhr.resource.uri] && this.fetchCallbacks[xhr.resource.uri].length) {
-      this.fetchCallbacks[xhr.resource.uri].shift()(true, undefined, xhr)
+    this.requested[xhr.original.uri] = 'done' // Kenny
+    while (this.fetchCallbacks[xhr.original.uri] && this.fetchCallbacks[xhr.original.uri].length) {
+      this.fetchCallbacks[xhr.original.uri].shift()(true, undefined, xhr)
     }
-    delete this.fetchCallbacks[xhr.resource.uri]
-    this.fireCallbacks('done', args)
+    delete this.fetchCallbacks[xhr.original.uri]
+    this.fireCallbacks('done', [xhr.original.uri])
   }
   var handlerList = [
     $rdf.Fetcher.RDFXMLHandler, $rdf.Fetcher.XHTMLHandler,
@@ -9746,14 +9814,14 @@ $rdf.Fetcher = function (store, timeout, async) {
     return new Promise(function (resolve, reject) {
       var xhr = $rdf.Util.XMLHTTPFactory()
       xhr.options = options
-      if (!options.noMeta) {
+      if (!options.noMeta && typeof tabulator !== 'undefined') {
         fetcher.saveRequestMetadata(xhr, tabulator.kb, uri)
       }
       xhr.onreadystatechange = function () {
         if (xhr.readyState === 4) { // NOte a 404 can be not afailure
           var ok = (!xhr.status || (xhr.status >= 200 && xhr.status < 300))
-          if (!options.noMeta) {
-            var response = fetcher.saveResponseMetadata(xhr, tabulator.kb)
+          if (!options.noMeta && typeof tabulator !== 'undefined') {
+            fetcher.saveResponseMetadata(xhr, tabulator.kb)
           }
           if (ok) resolve(xhr)
           reject(xhr.status + ' ' + xhr.statusText)
@@ -9898,9 +9966,10 @@ $rdf.Fetcher = function (store, timeout, async) {
       options = {}
       userCallback = p2
     } else if (typeof p2 === 'undefined') { // original calling signature
-      referingTerm = undefined
+      // referingTerm = undefined
     } else if (p2 instanceof $rdf.NamedNode) {
-      referingTerm = p2
+      // referingTerm = p2
+      options = {referingTerm: p2}
     } else {
       options = p2
     }
@@ -9962,7 +10031,9 @@ $rdf.Fetcher = function (store, timeout, async) {
       var timeNow = '[' + now.getHours() + ':' + now.getMinutes() + ':' + now.getSeconds() + '] '
       kb.add(request, ns.rdfs('label'), kb.literal(timeNow + ' Request for ' + docuri), this.appNode)
       kb.add(request, ns.link('requestedURI'), kb.literal(docuri), this.appNode)
-
+      if (xhr.original && xhr.original.uri !== docuri) {
+        kb.add(request, ns.link('orginalURI'), kb.literal(xhr.original.uri), this.appNode)
+      }
       kb.add(request, ns.link('status'), kb.collection(), this.appNode)
     }
     return request
@@ -9999,21 +10070,25 @@ $rdf.Fetcher = function (store, timeout, async) {
    **              or URI has already been loaded
    */
   this.requestURI = function (docuri, rterm, options, userCallback) { // sources_request_new
-    docuri = docuri.uri || docuri // NamedNode or string
-    // Remove #localid
-    docuri = docuri.split('#')[0]
 
+    // Various calling conventions
+    docuri = docuri.uri || docuri // NamedNode or string
+    docuri = docuri.split('#')[0]
     if (typeof options === 'boolean') {
       options = { 'force': options } // Ols dignature
     }
     if (typeof options === 'undefined') options = {}
+
     var force = !!options.force
     var kb = this.store
     var args = arguments
+    var baseURI = options.baseURI || docuri  // Preseve though proxying etc
+    options.userCallback = userCallback
 
     var pcol = $rdf.uri.protocol(docuri)
     if (pcol === 'tel' || pcol === 'mailto' || pcol === 'urn') {
       // "No look-up operation on these, but they are not errors?"
+      console.log('Unsupported protocol in: ' + docuri)
       return userCallback(false, 'Unsupported protocol', { 'status': 900 }) ||
         undefined
     }
@@ -10060,16 +10135,12 @@ $rdf.Fetcher = function (store, timeout, async) {
       kb.add(docterm.uri, ns.link('requestedBy'), rterm.uri, this.appNode)
     }
 
-    var useJQuery = typeof jQuery !== 'undefined'
-    if (!useJQuery) {
-      var xhr = $rdf.Util.XMLHTTPFactory()
-      var req = xhr.req = kb.bnode()
-      xhr.options = options
-      xhr.resource = docterm
-      xhr.requestedURI = args[0]
-    } else {
-      var req = kb.bnode()
-    }
+    var xhr = $rdf.Util.XMLHTTPFactory()
+    var req = xhr.req = kb.bnode()
+    xhr.original = $rdf.sym(baseURI)
+    // console.log('XHR original: ' + xhr.original)
+    xhr.options = options
+    xhr.resource = docterm  // This might be proxified
     var sf = this
 
     var now = new Date()
@@ -10079,29 +10150,26 @@ $rdf.Fetcher = function (store, timeout, async) {
       kb.add(req, ns.link('requestedURI'), kb.literal(docuri), this.appNode)
       kb.add(req, ns.link('status'), kb.collection(), this.appNode)
     }
-    // This should not be stored in the store, but in the JS data
-    /*
-    if (typeof kb.anyStatementMatching(this.appNode, ns.link("protocol"), $rdf.uri.protocol(docuri)) === "undefined") {
-        // update the status before we break out
-        this.failFetch(xhr, "Unsupported protocol: "+$rdf.uri.protocol(docuri))
-        return xhr
-    }
-    */
+
     var checkCredentialsRetry = function () {
       if (!xhr.withCredentials) return false // not dealt with
 
-      console.log('@@ Retrying with no credentials for ' + xhr.resource)
+      if (xhr.retriedWithCredentials) {
+        return true
+      }
+      xhr.retriedWithCredentials = true // protect against called twice
+      console.log('web: Retrying with no credentials for ' + xhr.resource)
       xhr.abort()
       delete sf.requested[docuri] // forget the original request happened
       var newopt = {}
-      for (var opt in options) {
+      for (var opt in options) { // transfer baseURI etc
         if (options.hasOwnProperty(opt)) {
           newopt[opt] = options[opt]
         }
       }
       newopt.withCredentials = false
       sf.addStatus(xhr.req, 'Abort: Will retry with credentials SUPPRESSED to see if that helps')
-      sf.requestURI(docuri, rterm, newopt, xhr.userCallback) // usercallback already registered (with where?)
+      sf.requestURI(docuri, rterm, newopt, xhr.userCallback) // userCallback already registered (with where?)
       return true
     }
 
@@ -10113,11 +10181,17 @@ $rdf.Fetcher = function (store, timeout, async) {
             var hostpart = $rdf.uri.hostpart
             var here = '' + document.location
             var uri = xhr.resource.uri
-            if (hostpart(here) && hostpart(uri) && hostpart(here) !== hostpart(uri)) {
+            if (hostpart(here) && hostpart(uri) && hostpart(here) !== hostpart(uri)) { // If cross-site
               if (xhr.status === 401 || xhr.status === 403 || xhr.status === 404) {
                 onreadystatechangeFactory(xhr)()
               } else {
+                // IT IS A PAIN THAT NO PROPER ERROR REPORTING
+                if (checkCredentialsRetry(xhr)) { // If credentials flag set, retry without,
+                  return
+                }
+                // If it wasn't, or we already tried that
                 var newURI = $rdf.Fetcher.crossSiteProxy(uri)
+                console.log('web: Direct failed so trying proxy ' + newURI)
                 sf.addStatus(xhr.req, 'BLOCKED -> Cross-site Proxy to <' + newURI + '>')
                 if (xhr.aborted) return
 
@@ -10133,6 +10207,7 @@ $rdf.Fetcher = function (store, timeout, async) {
                 // the callback throws an exception when called from xhr.onerror (so removed)
                 // sf.fireCallbacks('done', args) // Are these args right? @@@   Not done yet! done means success
                 sf.requested[xhr.resource.uri] = 'redirected'
+                sf.redirectedTo[xhr.resource.uri] = newURI
 
                 if (sf.fetchCallbacks[xhr.resource.uri]) {
                   if (!sf.fetchCallbacks[newURI]) {
@@ -10142,9 +10217,11 @@ $rdf.Fetcher = function (store, timeout, async) {
                   delete sf.fetchCallbacks[xhr.resource.uri]
                 }
 
-                var xhr2 = sf.requestURI(newURI, xhr.resource, options)
+                var xhr2 = sf.requestURI(newURI, xhr.resource, xhr.options, xhr.userCallback)
                 if (xhr2) {
                   xhr2.proxyUsed = true // only try the proxy once
+                  xhr2.original = xhr.original
+                  console.log('Proxying but original still ' + xhr2.original)
                 }
                 if (xhr2 && xhr2.req) {
                   if (!xhr.options.noMeta) {
@@ -10158,9 +10235,6 @@ $rdf.Fetcher = function (store, timeout, async) {
               }
             }
 
-            if (checkCredentialsRetry(xhr)) {
-              return
-            }
             xhr.status = 999 //
           }
         } // mashu
@@ -10177,7 +10251,7 @@ $rdf.Fetcher = function (store, timeout, async) {
           var thisReq = xhr.req // Might have changes by redirect
           sf.fireCallbacks('recv', args)
           var kb = sf.store
-          var response = sf.saveResponseMetadata(xhr, kb)
+          sf.saveResponseMetadata(xhr, kb)
           sf.fireCallbacks('headers', [{uri: docuri, headers: xhr.headers}])
 
           // Check for masked errors.
@@ -10199,10 +10273,10 @@ $rdf.Fetcher = function (store, timeout, async) {
               kb.fetcher.nonexistant[xhr.resource.uri] = true
             }
             if (xhr.responseText.length > 10) {
-              var response = kb.bnode()
-              kb.add(response, ns.http('content'), kb.literal(xhr.responseText), response)
+              var response2 = kb.bnode()
+              kb.add(response2, ns.http('content'), kb.literal(xhr.responseText), response2)
               if (xhr.statusText) {
-                kb.add(response, ns.http('statusText'), kb.literal(xhr.statusText), response)
+                kb.add(response2, ns.http('statusText'), kb.literal(xhr.statusText), response2)
               }
             // dump("HTTP >= 400 responseText:\n"+xhr.responseText+"\n"); // @@@@
             }
@@ -10242,7 +10316,7 @@ $rdf.Fetcher = function (store, timeout, async) {
             'html': 'text/html',
             'xml': 'text/xml'
           }
-
+          var guess
           if (xhr.status === 200) {
             addType(ns.link('Document'))
             var ct = xhr.headers['content-type']
@@ -10250,7 +10324,7 @@ $rdf.Fetcher = function (store, timeout, async) {
               xhr.headers['content-type'] = options.forceContentType
             }
             if (!ct || ct.indexOf('application/octet-stream') >= 0) {
-              var guess = extensionToContentType[xhr.resource.uri.split('.').pop()]
+              guess = extensionToContentType[xhr.resource.uri.split('.').pop()]
               if (guess) {
                 xhr.headers['content-type'] = guess
               }
@@ -10268,7 +10342,7 @@ $rdf.Fetcher = function (store, timeout, async) {
             if (options.forceContentType) {
               xhr.headers['content-type'] = options.forceContentType
             } else {
-              var guess = extensionToContentType[xhr.resource.uri.split('.').pop()]
+              guess = extensionToContentType[xhr.resource.uri.split('.').pop()]
               if (guess) {
                 xhr.headers['content-type'] = guess
               } else {
@@ -10284,7 +10358,7 @@ $rdf.Fetcher = function (store, timeout, async) {
                 sf.requested[udoc] && sf.requested[udoc] === 'done') { // we have already fetched this in fact.
               // should we smush too?
               // $rdf.log.info("HTTP headers indicate we have already" + " retrieved " + xhr.resource + " as " + udoc + ". Aborting.")
-              sf.doneFetch(xhr, args)
+              sf.doneFetch(xhr)
               xhr.abort()
               return
             }
@@ -10307,7 +10381,7 @@ $rdf.Fetcher = function (store, timeout, async) {
               sf.failFetch(xhr, 'Exception handling content-type ' + xhr.headers['content-type'] + ' was: ' + e)
             }
           } else {
-            sf.doneFetch(xhr, args) //  Not a problem, we just don't extract data.
+            sf.doneFetch(xhr) //  Not a problem, we just don't extract data.
             /*
             // sf.failFetch(xhr, "Unhandled content type: " + xhr.headers['content-type']+
             //        ", readyState = "+xhr.readyState)
@@ -10372,7 +10446,7 @@ $rdf.Fetcher = function (store, timeout, async) {
                 sf.fireCallbacks('redirected', args) // Are these args right? @@@
                 sf.requested[xhr.resource.uri] = 'redirected'
 
-                var xhr2 = sf.requestURI(newURI, xhr.resource, xhr.options || {})
+                var xhr2 = sf.requestURI(newURI, xhr.resource, xhr.options || {}, xhr.userCallback)
                 if (xhr2 && xhr2.req) {
                   kb.add(
                     xhr.req,
@@ -10402,7 +10476,7 @@ $rdf.Fetcher = function (store, timeout, async) {
               }
               sf.fireCallbacks('load', args)
               xhr.handle(function () {
-                sf.doneFetch(xhr, args)
+                sf.doneFetch(xhr)
               })
             } else {
               if (xhr.redirected) {
@@ -10445,71 +10519,31 @@ $rdf.Fetcher = function (store, timeout, async) {
     var actualProxyURI = this.proxyIfNecessary(uri2)
 
     // Setup the request
-    if (typeof jQuery !== 'undefined' && jQuery.ajax) {
-      var xhrFields = { withCredentials: withCredentials }
-      var xhr = jQuery.ajax({
-        url: actualProxyURI,
-        accepts: {'*': 'text/turtle,text/n3,application/rdf+xml'},
-        processData: false,
-        xhrFields: xhrFields,
-        timeout: sf.timeout,
-        headers: force ? { 'cache-control': 'no-cache' } : {},
-        error: function (xhr, s, e) {
-          xhr.req = req // Add these in case fails before .ajax returns
-          xhr.resource = docterm
-          xhr.options = options
-          xhr.requestedURI = uri2
-          xhr.withCredentials = withCredentials // Somehow gets lost by jq
+    // var xhr
+    // xhr = $rdf.Util.XMLHTTPFactory()
+    xhr.onerror = onerrorFactory(xhr)
+    xhr.onreadystatechange = onreadystatechangeFactory(xhr)
+    xhr.timeout = sf.timeout
+    xhr.withCredentials = withCredentials
+    xhr.actualProxyURI = actualProxyURI
 
-          if (s === 'timeout') {
-            sf.failFetch(xhr, 'requestTimeout')
-          } else {
-            onerrorFactory(xhr)(e)
-          }
-        },
-        success: function (d, s, xhr) {
-          xhr.req = req
-          xhr.resource = docterm
-          xhr.resource = docterm
-          xhr.requestedURI = uri2
+    xhr.req = req
+    xhr.options = options
+    xhr.options = options
+    xhr.resource = docterm
+    xhr.requestedURI = uri2
 
-          onreadystatechangeFactory(xhr)()
-        }
-      })
-
-      xhr.req = req
-      xhr.options = options
-
-      xhr.resource = docterm
-      xhr.options = options
-      xhr.requestedURI = uri2
-      xhr.actualProxyURI = actualProxyURI
-    } else {
-      var xhr = $rdf.Util.XMLHTTPFactory()
-      xhr.onerror = onerrorFactory(xhr)
-      xhr.onreadystatechange = onreadystatechangeFactory(xhr)
-      xhr.timeout = sf.timeout
-      xhr.withCredentials = withCredentials
-      xhr.actualProxyURI = actualProxyURI
-
-      xhr.req = req
-      xhr.options = options
-      xhr.options = options
-      xhr.resource = docterm
-      xhr.requestedURI = uri2
-
-      xhr.ontimeout = function () {
-        sf.failFetch(xhr, 'requestTimeout')
-      }
-      try {
-        xhr.open('GET', actualProxyURI, this.async)
-      } catch (er) {
-        return this.failFetch(xhr, 'XHR open for GET failed for <' + uri2 + '>:\n\t' + er)
-      }
-      if (force) { // must happen after open
-        xhr.setRequestHeader('Cache-control', 'no-cache')
-      }
-    } // if not jQuery
+    xhr.ontimeout = function () {
+      sf.failFetch(xhr, 'requestTimeout')
+    }
+    try {
+      xhr.open('GET', actualProxyURI, this.async)
+    } catch (er) {
+      return this.failFetch(xhr, 'XHR open for GET failed for <' + uri2 + '>:\n\t' + er)
+    }
+    if (force) { // must happen after open
+      xhr.setRequestHeader('Cache-control', 'no-cache')
+    }
 
     // Set redirect callback and request headers -- alas Firefox Extension Only
     if (typeof tabulator !== 'undefined' &&
@@ -10574,17 +10608,18 @@ $rdf.Fetcher = function (store, timeout, async) {
                   sf.addStatus(oldreq, 'redirected') // why
                   sf.fireCallbacks('redirected', args) // Are these args right? @@@
                   sf.requested[xhr.resource.uri] = 'redirected'
+                  sf.redirectedTo[xhr.resource.uri] = newURI
 
                   var hash = newURI.indexOf('#')
                   if (hash >= 0) {
-                    var msg = ('Warning: ' + xhr.resource + ' HTTP redirects to' + newURI + ' which should not contain a "#" sign')
                     if (!xhr.options.noMeta) {
-                      kb.add(xhr.resource, kb.sym('http://www.w3.org/2007/ont/link#warning'), msg)
+                      kb.add(xhr.resource, kb.sym('http://www.w3.org/2007/ont/link#warning'),
+                      'Warning: ' + xhr.resource + ' HTTP redirects to' + newURI + ' which should not contain a "#" sign')
                     }
                     newURI = newURI.slice(0, hash)
                   }
-                  var xhr2 = sf.requestURI(newURI, xhr.resource)
-                  if (xhr2 && xhr2.req && !noMeta) {
+                  var xhr2 = sf.requestURI(newURI, xhr.resource, xhr.options, xhr.userCallback)
+                  if (xhr2 && xhr2.req && !options.noMeta) {
                     kb.add(
                       xhr.req,
                       kb.sym('http://www.w3.org/2007/ont/link#redirectedRequest'),
@@ -10643,30 +10678,34 @@ $rdf.Fetcher = function (store, timeout, async) {
 
                   var hash = newURI.indexOf('#')
                   if (hash >= 0) {
-                    var msg = ('Warning: ' + xhr.resource + ' HTTP redirects to' + newURI + ' which should not contain a "#" sign')
+                    var msg2 = ('Warning: ' + xhr.resource + ' HTTP redirects to' + newURI + ' which do not normally contain a "#" sign')
                     // dump(msg+"\n")
-                    kb.add(xhr.resource, kb.sym('http://www.w3.org/2007/ont/link#warning'), msg)
+                    kb.add(xhr.resource, kb.sym('http://www.w3.org/2007/ont/link#warning'), msg2)
                     newURI = newURI.slice(0, hash)
                   }
-
+                  /*
                   if (sf.fetchCallbacks[xhr.resource.uri]) {
                     if (!sf.fetchCallbacks[newURI]) {
                       sf.fetchCallbacks[newURI] = []
                     }
-                    sf.fetchCallbacks[newURI] === sf.fetchCallbacks[newURI].concat(sf.fetchCallbacks[xhr.resource.uri])
+                    sf.fetchCallbacks[newURI] = sf.fetchCallbacks[newURI].concat(sf.fetchCallbacks[xhr.resource.uri])
                     delete sf.fetchCallbacks[xhr.resource.uri]
                   }
-
+                  */
                   sf.requested[xhr.resource.uri] = 'redirected'
+                  sf.redirectedTo[xhr.resource.uri] = newURI
 
-                  var xhr2 = sf.requestURI(newURI, xhr.resource)
-                  if (xhr2 && xhr2.req) {
-                    kb.add(
-                      xhr.req,
-                      kb.sym('http://www.w3.org/2007/ont/link#redirectedRequest'),
-                      xhr2.req,
-                      sf.appNode
-                    )
+                  var xhr2 = sf.requestURI(newURI, xhr.resource, xhr.options, xhr.userCallback)
+                  if (xhr2) { // may be no XHR is other URI already loaded
+                    xhr2.original = xhr.original  // use this for finding base
+                    if (xhr2.req) {
+                      kb.add(
+                        xhr.req,
+                        kb.sym('http://www.w3.org/2007/ont/link#redirectedRequest'),
+                        xhr2.req,
+                        sf.appNode
+                      )
+                    }
                   }
                 // else dump("No xhr.req available for redirect from "+xhr.resource+" to "+newURI+"\n")
                 } // asyncOnChannelRedirect
@@ -10694,6 +10733,7 @@ $rdf.Fetcher = function (store, timeout, async) {
         }
       }
       xhr.setRequestHeader('Accept', acceptstring)
+      this.addStatus(xhr.req, 'Accept: ' + acceptstring)
 
     // if (requester) { xhr.setRequestHeader('Referer',requester) }
     } catch (err) {
@@ -10701,22 +10741,18 @@ $rdf.Fetcher = function (store, timeout, async) {
     }
 
     // Fire
-    if (!useJQuery) {
-      try {
-        xhr.send(null)
-      } catch (er) {
-        return this.failFetch(xhr, 'XHR send failed:' + er)
-      }
-      setTimeout(function () {
-        if (xhr.readyState !== 4 && sf.isPending(xhr.resource.uri)) {
-          sf.failFetch(xhr, 'requestTimeout')
-        }
-      },
-        this.timeout)
-      this.addStatus(xhr.req, 'HTTP Request sent.')
-    } else {
-      this.addStatus(xhr.req, 'HTTP Request sent (using jQuery)')
+    try {
+      xhr.send(null)
+    } catch (er) {
+      return this.failFetch(xhr, 'XHR send failed:' + er)
     }
+    setTimeout(function () {
+      if (xhr.readyState !== 4 && sf.isPending(xhr.resource.uri)) {
+        sf.failFetch(xhr, 'requestTimeout')
+      }
+    },
+      this.timeout)
+    this.addStatus(xhr.req, 'HTTP Request sent.')
     return xhr
   } // this.requestURI()
 
@@ -10756,6 +10792,8 @@ $rdf.Fetcher = function (store, timeout, async) {
       return 'requested'
     } else if (this.requested[docuri] === 'done') {
       return 'fetched'
+    } else if (this.requested[docuri] === 'redirected') {
+      return this.getState(this.redirectedTo[docuri])
     } else { // An non-200 HTTP error status
       return 'failed'
     }
@@ -10779,7 +10817,7 @@ $rdf.fetcher = function (store, timeout, async) { return new $rdf.Fetcher(store,
 // Hence the mess beolow with executeCallback.
 
 $rdf.parsable = {'text/n3': true, 'text/turtle': true, 'application/rdf+xml': true,
-'application/rdfa': true, 'application/ld+json': true }
+'application/xhtml+xml': true, 'text/html': true, 'application/ld+json': true }
 
 $rdf.parse = function parse (str, kb, base, contentType, callback) {
   try {
@@ -10791,11 +10829,14 @@ $rdf.parse = function parse (str, kb, base, contentType, callback) {
       var parser = new $rdf.RDFParser(kb)
       parser.parse($rdf.Util.parseXML(str), base, kb.sym(base))
       executeCallback()
-    } else if (contentType === 'application/rdfa') { // @@ not really a valid mime type
-      $rdf.parseDOM_RDFa($rdf.Util.parseXML(str), kb, base)
+    } else if (contentType === 'application/xhtml+xml') {
+      $rdf.parseRDFaDOM($rdf.Util.parseXML(str, {contentType: 'application/xhtml+xml'}), kb, base)
+      executeCallback()
+    } else if (contentType === 'text/html') {
+      $rdf.parseRDFaDOM($rdf.Util.parseXML(str, {contentType: 'text/html'}), kb, base)
       executeCallback()
     } else if (contentType === 'application/sparql-update') { // @@ we handle a subset
-      sparqlUpdateParser(store, str, base)
+      $rdf.sparqlUpdateParser(str, kb, base)
       executeCallback()
     } else if (contentType === 'application/ld+json' ||
       contentType === 'application/nquads' ||
@@ -10803,12 +10844,11 @@ $rdf.parse = function parse (str, kb, base, contentType, callback) {
       var n3Parser = N3.Parser()
       var N3Util = N3.Util
       var triples = []
-      var prefixes = {}
+
       if (contentType === 'application/ld+json') {
         var jsonDocument
         try {
           jsonDocument = JSON.parse(str)
-          setJsonLdBase(jsonDocument, base)
         } catch (parseErr) {
           callback(parseErr, null)
         }
@@ -10845,7 +10885,7 @@ $rdf.parse = function parse (str, kb, base, contentType, callback) {
       }
     }
   }
-
+/*
   function setJsonLdBase (doc, base) {
     if (doc instanceof Array) {
       return
@@ -10855,7 +10895,7 @@ $rdf.parse = function parse (str, kb, base, contentType, callback) {
     }
     doc['@context']['@base'] = base
   }
-
+*/
   function nquadCallback (err, nquads) {
     if (err) {
       callback(err, kb)
@@ -10929,13 +10969,16 @@ $rdf.serialize = function (target, kb, base, contentType, callback) {
       case 'application/rdf+xml':
         documentString = sz.statementsToXML(newSts)
         return executeCallback(null, documentString)
-        break
-      case 'text/n3':
-      case 'text/turtle':
-      case 'application/x-turtle': // Legacy
-      case 'application/n3': // Legacy
-        documentString = sz.statementsToN3(newSts)
-        return executeCallback(null, documentString)
+        case 'text/n3':
+        case 'application/n3': // Legacy
+          documentString = sz.statementsToN3(newSts)
+          return executeCallback(null, documentString)
+
+          case 'text/turtle':
+          case 'application/x-turtle': // Legacy
+            sz.setFlags('si') // Suppress = for sameAs and => for implies
+            documentString = sz.statementsToN3(newSts)
+            return executeCallback(null, documentString)
       case 'application/ld+json':
         n3String = sz.statementsToN3(newSts)
         $rdf.convert.convertToJson(n3String, callback)
@@ -11054,5 +11097,5 @@ if (typeof exports !== 'undefined') {
   // Leak a global regardless of module system
   root['$rdf'] = $rdf
 }
-$rdf.buildTime = "2016-03-02T14:11:16";
+$rdf.buildTime = "2016-05-12T15:09:38";
 })(this);

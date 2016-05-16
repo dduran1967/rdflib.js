@@ -1,11 +1,15 @@
 {
   "name": "rdflib",
   "description": "an RDF library for node.js. Suitable for client and server side.",
+<<<<<<< HEAD
   "version": "0.5.0",
+=======
+  "version": "0.7.0",
+>>>>>>> linkeddata/master
   "private": false,
   "author": {
-    "name": "J. Presbrey",
-    "email": "presbrey@mit.edu"
+    "name": "Tim BL",
+    "email": "timbl@w3.org"
   },
   "license": "MIT",
   "repository": {
@@ -23,11 +27,11 @@
   },
   "devDependencies": {
     "browserify": "^13.0.0",
+    "minifyify": "^7.3.2",
     "nodeunit": "^0.9.1"
   },
   "scripts": {
-    "test": "make test",
-    "prepublish": "make clean all"
+    "test": "make test"
   },
   "files": [
     "dist",
